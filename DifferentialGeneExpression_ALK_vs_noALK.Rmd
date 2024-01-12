@@ -1,0 +1,135 @@
+---
+title: "DifferentialGeneExpression_ALK_vs_NoALK"
+author: "Sarah-Lee"
+date: "27/04/2022"
+output: html_document
+---
+
+Load Packages 
+```{r setup}
+# install.packages("Seurat") - V4.1
+library(Seurat)
+# install.packages("ggplot2") - V3.3.6
+library(ggplot2)
+# install.packages("tidyverse") - V1.3.2
+library(tidyverse)
+
+# to always have the same parameters 
+set.seed(2)
+
+# Specific for HPC to make plots
+options(bitmapType = "cairo")
+```
+
+Read Data 
+```{r}
+setwd("/kyukon/scratch/gent/gvo000/gvo00097/vsc43612/2022_SingleCell_Stéphane/RDSObjects")
+
+stef_ALK_noALK <- readRDS("stef_ALK_and_noALK_integrated.rds")
+
+# basic UMAP colored by clusters
+DimPlot(stef_ALK_noALK, label = TRUE)
+
+# UMAP colored by ALK vs noALK 
+stef_ALK_noALK@meta.data$Celltype<- gsub("-D.*","",stef_ALK_noALK@meta.data$hash.ID)
+stef_ALK_noALK@meta.data$Celltype<- gsub("[1-2].*","",stef_ALK_noALK@meta.data$Celltype)
+Idents(stef_ALK_noALK) <- "Celltype"
+DimPlot(stef_ALK_noALK, reduction="umap", group.by = "Celltype", label = FALSE) + 
+  ggtitle("Stéphane ALK vs noALK colored by celltype")
+
+```
+
+Check differential expressed genes between cluster 4 and the rest of the clusters with the full list and not only the significant ones 
+```{r}
+cluster4_vs_all <- FindMarkers(stef_ALK_noALK, ident.1 = 4,  ident.2 = c(0,1, 2, 3, 5))
+head(cluster4_vs_all, n = 5)
+
+write.table(cluster4_vs_all, "DifferentialExpressedGenes_Cluster4_vs_AllClusters.txt")
+```
+
+Create for every cluster, a list with the differential expressed genes per cluster 
+```{r}
+# Cluster 0
+cluster0_vs_all <- FindMarkers(stef_ALK_noALK, ident.1 = 0,  ident.2 = c(1, 2, 3, 4, 5))
+head(cluster0_vs_all, n = 5)
+
+write.table(cluster0_vs_all, "DifferentialExpressedGenes_Cluster0_vs_AllClusters.txt")
+
+# Cluster 1
+cluster1_vs_all <- FindMarkers(stef_ALK_noALK, ident.1 = 1,  ident.2 = c(0, 2, 3, 4, 5))
+head(cluster1_vs_all, n = 5)
+
+write.table(cluster1_vs_all, "DifferentialExpressedGenes_Cluster1_vs_AllClusters.txt")
+
+# Cluster 2
+cluster2_vs_all <- FindMarkers(stef_ALK_noALK, ident.1 = 2,  ident.2 = c(0, 1, 3, 4, 5))
+head(cluster2_vs_all, n = 5)
+
+write.table(cluster2_vs_all, "DifferentialExpressedGenes_Cluster2_vs_AllClusters.txt")
+
+# Cluster 3
+cluster3_vs_all <- FindMarkers(stef_ALK_noALK, ident.1 = 3,  ident.2 = c(0, 1, 2, 4, 5))
+head(cluster3_vs_all, n = 5)
+
+write.table(cluster3_vs_all, "DifferentialExpressedGenes_Cluster3_vs_AllClusters.txt")
+
+# Cluster 5
+cluster5_vs_all <- FindMarkers(stef_ALK_noALK, ident.1 = 5,  ident.2 = c(0, 1, 2, 3, 4))
+head(cluster5_vs_all, n = 5)
+
+write.table(cluster5_vs_all, "DifferentialExpressedGenes_Cluster5_vs_AllClusters.txt")
+```
+
+Differential gene expression analysis for population 4: ALK vs noALK 
+```{r}
+population_4 <- subset(stef_ALK_noALK, subset = seurat_clusters == "4")
+DimPlot(population_4, reduction = "umap") + 
+  ggtitle("UMAP population 4 only")
+
+# UMAP colored by ALK vs noALK 
+population_4@meta.data$Celltype<- gsub("-D.*","",population_4@meta.data$hash.ID)
+population_4@meta.data$Celltype<- gsub("[1-2].*","",population_4@meta.data$Celltype)
+Idents(population_4) <- "Celltype"
+
+DimPlot(population_4, reduction="umap", group.by = "Celltype", label = FALSE) + 
+  ggtitle("Population 4: ALK vs noALK colored by celltype")
+ggsave(filename = "UMAP_Population4_Only.pdf", device = "pdf")
+  
+ 
+# Find genes 
+diff_genes_pop4 <- FindMarkers(population_4, ident.1 = "ALK", ident.2 = "SC")
+
+head(diff_genes_pop4)
+
+write.table(diff_genes_pop4, "DifferentialExpressedGenes_Only_Population4.txt")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

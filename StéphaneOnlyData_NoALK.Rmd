@@ -1,0 +1,351 @@
+---
+title: "CellsOfInterest"
+output: html_document
+date: '2022-05-30'
+---
+Load packages
+```{r, include = FALSE}
+# install.packages("Seurat") - V4.1
+library(Seurat)
+# install.packages("ggplot2") - V3.3.6
+library(ggplot2)
+# install.packages("tidyverse") - V1.3.2
+library(tidyverse)
+
+memory.limit(size=40000)
+# to always have the same parameters 
+set.seed(2)
+
+# Specific for HPC to make plots
+options(bitmapType = "cairo")
+```
+
+Read SeuratObject: 
+```{r}
+setwd("/kyukon/scratch/gent/gvo000/gvo00097/vsc43612/2022_SingleCell_Stéphane/RDSObjects")
+ada_stefNoALK <- readRDS("ada_and_stefNoALK_dim20_res06.rds")
+```
+
+Show UMAP - Adameyko + Stéphane
+```{r}
+DimPlot(ada_stefNoALK, reduction="umap", group.by = "seurat_clusters", label = TRUE) + 
+  ggtitle("Adameyko + Stéphane noALK")
+```
+
+Show UMAP - Adameyko and Stéphane seperated
+```{r}
+DimPlot(ada_stefNoALK, reduction="umap", split.by = "nez", label = TRUE)
+
+# Keep only data from Stéphane 
+stéphane_only <- subset(ada_stefNoALK, subset = nez == "sc")
+saveRDS("stéphane_only_SLB.rds")
+```
+
+Focus only on the cells of interest (Schwann cell precursors, Bridging cells, Chromaffin like cells, sympathoblasts, cycling sympathoblasts)
+```{r}
+cells_of_interest <- subset(stéphane_only, idents = c("9", "11", "12", "18", "22"))
+DimPlot(cells_of_interest, reduction="umap", group.by = "seurat_clusters", label = TRUE)
+ggsave(file = "../DataAnalysis_SLB/CellsOfInterest/OnlyCells_Of_Interest.pdf", device = "pdf")
+
+# Calculate the percentage cells per cluster
+percentages_per_cluster <- as.data.frame(cells_of_interest@meta.data) %>% group_by(seurat_clusters) %>% summarise(ncells_cluster=n()) %>% mutate(prop_cluster=ncells_cluster/sum(ncells_cluster))
+
+
+percentages_per_cluster
+
+percentages_per_cluster %>%
+  ggplot(aes(x=seurat_clusters, y=prop_cluster, fill = seurat_clusters)) + 
+  geom_bar(stat="identity") + 
+  ggtitle("Cells of interest")
+ggsave(file = "../DataAnalysis_SLB/CellsOfInterest/Barplot_OnlyCells_Of_Interest.pdf", device = "pdf")
+```
+
+Redo the normalization and clustering steps only on your cells of interest
+
+Based on: DefaultAssay(cells_of_interest)<- "integrated"
+```{r}
+DefaultAssay(cells_of_interest)<- "integrated"
+cells_of_interest <- FindVariableFeatures(object = cells_of_interest, selection.method = "vst", nfeatures = 2000)
+
+### Plot variable features with and without labels
+top10 <- head(x = VariableFeatures(object = cells_of_interest), 10)
+plot1 <- VariableFeaturePlot(object = cells_of_interest)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+
+print(plot2)
+```
+
+Scaling Data
+
+```{r, message=FALSE, warning=FALSE,tidy=T}
+cells_of_interest <- ScaleData(object = cells_of_interest, features = rownames(cells_of_interest))
+
+##### Check per group #####
+cells_of_interest[['nUMI_scaled']]<-colSums(as.matrix(cells_of_interest[['integrated']]@scale.data))
+cells_of_interest[['nGene_scaled']]<-apply(as.matrix(cells_of_interest[['integrated']]@scale.data),2,function(x){sum(x>0)})
+
+VlnPlot(cells_of_interest, features=c("nUMI_scaled","nGene_scaled"))
+```
+
+PCA analysis after scaling
+
+```{r, message=FALSE, warning=FALSE,tidy=T}
+cells_of_interest <- RunPCA(object = cells_of_interest, features = VariableFeatures(cells_of_interest), npcs = 60, ndims.print = 1:5, nfeatures.print = 10)
+#seuratObj[['pca']]@cell.embeddings[1:5,1:5]
+
+```
+
+Significant PCs
+
+```{r, message=FALSE, warning=FALSE,tidy=T}
+
+### Run Jackstraw and create plot. This can take a couple of minutes to calculate
+cells_of_interest <- JackStraw(object = cells_of_interest, num.replicate = 100, dims = 60)
+cells_of_interest <- ScoreJackStraw(object = cells_of_interest, dims = 1:60)
+
+JackStrawPlot(object = cells_of_interest, dims = 1:60)
+ElbowPlot(object = cells_of_interest, ndims = 60)
+```
+
+Clustering cells 
+```{r, message=F, warning=F, tidy=T}
+#save old clusters
+cells_of_interest@meta.data$seurat_clusters_old <- cells_of_interest@meta.data$seurat_clusters
+
+# Play with these variables until you have a good tSNE/clustering
+dimsToTry <- 20
+resToUse <- 0.3
+
+##### Find clusters
+cells_of_interest <- FindNeighbors(object = cells_of_interest, dims = 1:dimsToTry)
+cells_of_interest <- FindClusters(object = cells_of_interest, resolution = resToUse)
+
+##### Create tSNE plot
+cells_of_interest <- RunTSNE(object = cells_of_interest, dims = 1:dimsToTry,check_duplicates = FALSE)
+tsnePlot <- DimPlot(cells_of_interest, reduction = "tsne", label = T, label.size = 8, pt.size = 1)
+tsnePlot
+
+##### Create UMAP plot
+cells_of_interest<- RunUMAP(cells_of_interest, dims = 1:dimsToTry, n_neighbors = 30)
+umapPlot <- DimPlot(cells_of_interest, reduction = "umap", label = T, label.size = 8)
+
+umapPlot
+# New UMAP after normalization and clustering but coloured using old colors 
+DimPlot(cells_of_interest, reduction = "umap", label = T, label.size = 8, group.by = "seurat_clusters_old") + 
+  ggtitle("Cells of Interest after redoing normalization and clustering")
+ggsave(file = "../DataAnalysis_SLB/CellsOfInterest/UMAP_Cells_Of_Interest_afterRedoingNormClust_OldColors_Integrated.pdf", device = "pdf")
+
+# UMAP with new colors en clusters
+DimPlot(cells_of_interest, reduction = "umap", label = T, label.size = 8, group.by = "seurat_clusters" ) + 
+  ggtitle("Cells of Interest after redoing normalization and clustering")
+ggsave(file = "../DataAnalysis_SLB/CellsOfInterest/UMAP_Cells_Of_Interest_afterRedoingNormClust_NewColors_Integrated.pdf", device = "pdf")
+```
+
+FeaturePlot 
+```{r}
+# Schwann Cell Precursor - SOX10
+FeaturePlot(cells_of_interest, features = c("SOX10"))
+ggsave(file = "../DataAnalysis_SLB/CellsOfInterest/FeaturePlot_SOX10_NewClustering_Integrated.pdf", device = "pdf")
+
+# Bridging cells - ASCL1
+FeaturePlot(cells_of_interest, features = c("ASCL1"))
+ggsave(file = "../DataAnalysis_SLB/CellsOfInterest/FeaturePlot_ASCL1_NewClustering_Integrated.pdf", device = "pdf")
+
+# Chromaffin like-progenitor cells - DBH
+FeaturePlot(cells_of_interest, features = c("DBH"))
+ggsave(file = "../DataAnalysis_SLB/CellsOfInterest/FeaturePlot_DBH_NewClustering_Integrated.pdf", device = "pdf")
+
+# Sympatho-adrenergic precursors - STMN2
+FeaturePlot(cells_of_interest, features = c("STMN2"))
+ggsave(file = "../DataAnalysis_SLB/CellsOfInterest/FeaturePlot_STMN2_NewClustering_Integrated.pdf", device = "pdf")
+
+# Cycling Sympatho-adrenergic precursors - TOP2A
+FeaturePlot(cells_of_interest, features = c("TOP2A"))
+ggsave(file = "../DataAnalysis_SLB/CellsOfInterest/FeaturePlot_TOP2A_NewClustering_Integrated.pdf", device = "pdf")
+
+```
+
+```{r}
+# Save data 
+saveRDS(cells_of_interest,"CellsOfInterest_SLB.rds")
+```
+
+Check differential expressed genes between clusters. 
+
+```{r}
+Idents(cells_of_interest) <- "seurat_clusters"
+
+# Cluster 0 vs all 
+cluster0_vs_all <- FindMarkers(cells_of_interest, ident.1 = 0)
+head(cluster0_vs_all, n = 5)
+
+write.table(cluster0_vs_all, "../DataAnalysis_SLB/CellsOfInterest/DifferentialExpressedGenes_Cluster0_vs_AllClusters.txt")
+
+# Cluster 1 vs all 
+cluster1_vs_all <- FindMarkers(cells_of_interest, ident.1 = 1)
+head(cluster1_vs_all, n = 5)
+
+write.table(cluster1_vs_all, "../DataAnalysis_SLB/CellsOfInterest/DifferentialExpressedGenes_Cluster1_vs_AllClusters.txt")
+
+# Cluster 2 vs all 
+cluster2_vs_all <- FindMarkers(cells_of_interest, ident.1 = 2)
+head(cluster2_vs_all, n = 5)
+
+write.table(cluster2_vs_all, "../DataAnalysis_SLB/CellsOfInterest/DifferentialExpressedGenes_Cluster2_vs_AllClusters.txt")
+
+# Cluster 3 vs all 
+cluster3_vs_all <- FindMarkers(cells_of_interest, ident.1 = 3)
+head(cluster3_vs_all, n = 5)
+
+write.table(cluster3_vs_all, "../DataAnalysis_SLB/CellsOfInterest/DifferentialExpressedGenes_Cluster3_vs_AllClusters.txt")
+
+# Cluster 4 vs all 
+cluster4_vs_all <- FindMarkers(cells_of_interest, ident.1 = 4)
+head(cluster4_vs_all, n = 5)
+
+write.table(cluster4_vs_all, "../DataAnalysis_SLB/CellsOfInterest/DifferentialExpressedGenes_Cluster4_vs_AllClusters.txt")
+
+# Cluster 5 vs all 
+cluster5_vs_all <- FindMarkers(cells_of_interest, ident.1 = 5)
+head(cluster5_vs_all, n = 5)
+
+write.table(cluster5_vs_all, "../DataAnalysis_SLB/CellsOfInterest/DifferentialExpressedGenes_Cluster5_vs_AllClusters.txt")
+
+# Cluster 6 vs all 
+cluster6_vs_all <- FindMarkers(cells_of_interest, ident.1 = 6)
+head(cluster6_vs_all, n = 5)
+
+write.table(cluster6_vs_all, "../DataAnalysis_SLB/CellsOfInterest/DifferentialExpressedGenes_Cluster6_vs_AllClusters.txt")
+
+# Cluster 7 vs all 
+cluster7_vs_all <- FindMarkers(cells_of_interest, ident.1 = 7)
+head(cluster7_vs_all, n = 5)
+
+write.table(cluster7_vs_all, "../DataAnalysis_SLB/CellsOfInterest/DifferentialExpressedGenes_Cluster7_vs_AllClusters.txt")
+```
+
+Barplots for the cells of interest 
+```{r}
+# Barplots for all cells
+percentages_per_cluster <- as.data.frame(stéphane_only@meta.data) %>% group_by(seurat_clusters) %>% summarise(ncells_cluster=n()) %>% mutate(prop_cluster=ncells_cluster/sum(ncells_cluster))
+
+
+percentages_per_cluster
+
+percentages_per_cluster %>%
+  ggplot(aes(x=seurat_clusters, y=prop_cluster, fill = seurat_clusters)) + 
+  geom_bar(stat="identity") + 
+  ggtitle("Only Stéphane")
+
+# Barplot for cells of interest 
+cells <- percentages_per_cluster[which(percentages_per_cluster$seurat_clusters == "12" | percentages_per_cluster$seurat_clusters == "22" |
+                                   percentages_per_cluster$seurat_clusters == "11"| percentages_per_cluster$seurat_clusters == "9" |
+                                     percentages_per_cluster$seurat_clusters == "18"),]
+
+# Specific order for paper
+cells %>%
+  ggplot(aes(x=seurat_clusters, y=prop_cluster, fill = seurat_clusters)) + 
+  geom_bar(stat="identity") + 
+  ggtitle("Cells of interest with %cells of big UMAP") + 
+  scale_x_discrete(limits = c("12", "22", "11", "9", "18")) 
+ggsave(file = "../DataAnalysis_SLB/Barplots/Barplot_Cells_of_Interest_wittperfBigUMAP.pdf", device = "pdf")
+
+# Barplot for extended cells of interest  
+cells_ext <- percentages_per_cluster[which(percentages_per_cluster$seurat_clusters == "12" | percentages_per_cluster$seurat_clusters == "22" |
+                                   percentages_per_cluster$seurat_clusters == "11"| percentages_per_cluster$seurat_clusters == "9" |
+                                     percentages_per_cluster$seurat_clusters == "18" | percentages_per_cluster$seurat_clusters == "5" |
+                                     percentages_per_cluster$seurat_clusters == "3"| percentages_per_cluster$seurat_clusters == "29"| 
+                                     percentages_per_cluster$seurat_clusters == "13"| percentages_per_cluster$seurat_clusters == "2" |
+                                     percentages_per_cluster$seurat_clusters == "4"),]
+
+cells_ext
+
+# Specific order for paper
+cells_ext %>%
+  ggplot(aes(x=seurat_clusters, y=prop_cluster, fill = seurat_clusters)) + 
+  geom_bar(stat="identity") + 
+  ggtitle("Cells of interest with %cells of big UMAP") + 
+  scale_x_discrete(limits = c("12", "22", "11", "9", "18", "5", "3", "29", "13", "2", "4")) 
+ggsave(file = "../DataAnalysis_SLB/Barplots/Barplot_Cells_of_Interest_EXT_wittperfBigUMAP.pdf", device = "pdf")
+
+
+
+```
+
+Dag 26 vs day 32
+```{r}
+# Now the difference between day 26 and day 32 for EACH specific cluster 
+stéphane_only@meta.data$Days<- gsub(".*-D","",stéphane_only@meta.data$hash.ID)
+DimPlot(stéphane_only, reduction="umap", group.by = "Days")
+
+# Calculate % of cells per timepoint 
+percentages_per_day <- as.data.frame(stéphane_only@meta.data) %>% 
+  group_by(seurat_clusters, Days) %>% 
+  summarise(ncells_cluster=n())
+  
+sum_all_celles = sum(percentages_per_day$ncells_cluster)  
+
+percentages_per_day$prop_cluster <- percentages_per_day$ncells_cluster/sum_all_celles
+
+# Correct! Sum of the different % of cells per timepoint is the same as above 
+percentages_per_day
+
+cells_days <- percentages_per_day[which(percentages_per_day$seurat_clusters == "12" | percentages_per_day$seurat_clusters == "22" |
+                                   percentages_per_day$seurat_clusters == "11"| percentages_per_day$seurat_clusters == "9" |
+                                     percentages_per_day$seurat_clusters == "18"),]
+
+# For day 26! 
+cells_day26 <- cells_days[which(cells_days$Days == "26"),]
+
+cells_day26 %>%
+  ggplot(aes(x=seurat_clusters, y=prop_cluster, fill = seurat_clusters)) + 
+  geom_bar(stat="identity") + 
+  ggtitle("Cells of interest with %cells of big UMAP for day 26") +
+  scale_x_discrete(limits = c("12", "22", "11", "9", "18")) + 
+  ylim(0,0.015)
+ggsave(file = "../DataAnalysis_SLB/Barplots/Barplot_Cells_of_Interest_wittperfBigUMAP_day26.pdf", device = "pdf")
+
+# For day 32! 
+cells_day32 <- cells_days[which(cells_days$Days == "32"),]
+
+cells_day32 %>%
+  ggplot(aes(x=seurat_clusters, y=prop_cluster, fill = seurat_clusters)) + 
+  geom_bar(stat="identity") + 
+  ggtitle("Cells of interest with %cells of big UMAP for day 32") +
+  scale_x_discrete(limits = c("12", "22", "11", "9", "18")) + 
+  ylim(0,0.015)
+ggsave(file = "../DataAnalysis_SLB/Barplots/Barplot_Cells_of_Interest_wittperfBigUMAP_day32.pdf", device = "pdf")
+
+# Barplot for extended cells of interest 
+cells_days_ext <- percentages_per_day[which(percentages_per_day$seurat_clusters == "12" | percentages_per_day$seurat_clusters == "22" |
+                                              percentages_per_day$seurat_clusters == "11"| percentages_per_day$seurat_clusters == "9" |
+                                              percentages_per_day$seurat_clusters == "18" | percentages_per_day$seurat_clusters == "5" |
+                                              percentages_per_day$seurat_clusters == "3"| percentages_per_day$seurat_clusters == "29"|
+                                              percentages_per_day$seurat_clusters == "13"| percentages_per_day$seurat_clusters == "13" |
+                                              percentages_per_day$seurat_clusters == "2" |percentages_per_day$seurat_clusters == "4"),]
+
+cells_days_ext
+
+
+# For day 26! 
+cells_day26_ext <- cells_days_ext[which(cells_days_ext$Days == "26"),]
+
+cells_day26_ext %>%
+  ggplot(aes(x=seurat_clusters, y=prop_cluster, fill = seurat_clusters)) + 
+  geom_bar(stat="identity") + 
+  ggtitle("Cells of interest with %cells of big UMAP for day 26") +
+  scale_x_discrete(limits = c("12", "22", "11", "9", "18", "5", "3", "29", "13", "2", "4")) + 
+  ylim(0,0.015)
+ggsave(file = "../DataAnalysis_SLB/Barplots/Barplot_Cells_of_Interest_EXT_wittperfBigUMAP_day26.pdf", device = "pdf")
+
+# For day 32! 
+cells_day32_ext <- cells_days_ext[which(cells_days_ext$Days == "32"),]
+
+cells_day32_ext %>%
+  ggplot(aes(x=seurat_clusters, y=prop_cluster, fill = seurat_clusters)) + 
+  geom_bar(stat="identity") + 
+  ggtitle("Cells of interest with %cells of big UMAP for day 32") +
+  scale_x_discrete(limits = c("12", "22", "11", "9", "18", "5", "3", "29", "13", "2", "4")) + 
+  ylim(0,0.015)
+ggsave(file = "../DataAnalysis_SLB/Barplots/Barplot_Cells_of_Interest_EXT_wittperfBigUMAP_day32.pdf", device = "pdf")
+

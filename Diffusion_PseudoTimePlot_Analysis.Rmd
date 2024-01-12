@@ -1,0 +1,237 @@
+---
+title: "DiffusionMap_PseudoTimePoint_Analysis"
+output: html_document
+date: '2022-06-15'
+---
+
+# Library
+```{r, include=FALSE}
+# install.packages("Seurat") - V4.1
+library(Seurat)
+# install.packages("BiocManager") - V1.30.18
+# BiocManager::install("destiny") - V3.8.1
+library(destiny)
+# BiocManager::install("SingleCellExperiment") - V1.16.0
+library(SingleCellExperiment)
+# install.packages("ggplot2") - V3.3.6
+library(ggplot2)
+# BiocManager::install("slingshot") - V2.4.0
+library(slingshot)
+# install.packages("RColorBrewer") - V1.1-3
+library(RColorBrewer)
+# install.packages("viridis") - V0.6.2
+library(viridis)
+# install.packages("grDevices") - V4.1.1
+library(grDevices)
+```
+
+# Parameters 
+```{r}
+# to always have the same parameters 
+set.seed(2)
+
+# Specific for HPC to make plots
+options(bitmapType = "cairo")
+```
+
+# Read data
+```{r}
+cells_of_interest <- readRDS("../RDSObjects/CellsOfInterest_SLB.rds")
+
+# need to be a matrix
+sce <- as.SingleCellExperiment(cells_of_interest)
+```
+
+# Diffusion plot 
+```{r}
+dim(Embeddings(cells_of_interest, "pca")[,1:20])
+
+# Dim 18
+dm_S <- DiffusionMap(Embeddings(cells_of_interest, "pca")[,1:18])
+
+cellLabels <- sce$seurat_clusters_old
+tmp <- data.frame(DC1 = eigenvectors(dm_S)[, 1],
+                  DC2 = eigenvectors(dm_S)[, 2],
+                  DC3 = eigenvectors(dm_S)[, 3],
+                  DC4 = eigenvectors(dm_S)[, 4],
+                  Samples = cellLabels)
+
+ggplot(tmp, aes(x = DC1, y = DC2, color = Samples)) +
+  geom_point()  + 
+  xlab("Diffusion component 1") + 
+  ylab("Diffusion component 2") +
+  theme_classic() 
+
+
+# Dim 20
+dm_S <- DiffusionMap(Embeddings(cells_of_interest, "pca")[,1:20])
+
+cellLabels <- sce$seurat_clusters_old
+tmp <- data.frame(DC1 = eigenvectors(dm_S)[, 1],
+                  DC2 = eigenvectors(dm_S)[, 2],
+                  DC3 = eigenvectors(dm_S)[, 3],
+                  DC4 = eigenvectors(dm_S)[, 4],
+                  Samples = cellLabels)
+
+ggplot(tmp, aes(x = DC1, y = DC2, color = Samples)) +
+  geom_point()  + 
+  xlab("Diffusion component 1") + 
+  ylab("Diffusion component 2") +
+  theme_classic() 
+```
+
+
+# Slingshot to make pseudotime/trajectory analysis 
+```{r}
+# Add DC components in the seurat object - I have worked with your diffusion map components because of the two nice lineages 
+dimentions_DC <- cbind(dm_S$DC1, dm_S$DC2)
+head(dimentions_DC)
+colnames(dimentions_DC) <- c("DM_1", "DM_2")
+
+cells_of_interest[["DC"]] <- CreateDimReducObject(embeddings = dimentions_DC, key = "DC_", assay = DefaultAssay(cells_of_interest))
+DimPlot(cells_of_interest, reduction = "DC")
+
+
+# start from SingleCellExperiment matrix  
+sce <- as.SingleCellExperiment(cells_of_interest)
+
+# slingshot function with DC as reduction 
+sce_slingshot <- slingshot(sce, clusterLabels = "seurat_clusters_old", reducedDim = "DC")
+
+#summary(sce_slingshot$slingPseudotime_1)
+
+# Make this avaible for a ggplot! 
+df_sce <- as.data.frame(reducedDims(sce_slingshot)$DC)
+
+# Plot 1
+ggplot(df_sce, aes(x = DC_1, y = DC_2, color = sce_slingshot$slingPseudotime_1)) + 
+  geom_point() + 
+  theme_classic() + 
+  scale_color_viridis() + 
+  ggtitle("Pseudotime analysis from SCP to SAPs cells") 
+
+# Plot 2
+ggplot(df_sce, aes(x = DC_1, y = DC_2, color = sce_slingshot$slingPseudotime_2)) + 
+  geom_point() + 
+  theme_classic() + 
+  scale_color_viridis() + 
+  ggtitle("Pseudotime analysis from SCP to Proliferating SAPs cells")
+
+# As you can see, there are two different pseuodotime lineages. 
+```
+
+# Because we have two lineages based on slingshot, we need 2 different figures (same as in Westermans paper) 
+
+# Subset1: 12 - 22 - 11 - 9 
+```{r}
+SCP_SAP <- subset(cells_of_interest, subset = seurat_clusters_old == c("12", "22", "11", "9"))
+
+SCP_SAP <- as.SingleCellExperiment(SCP_SAP)
+# slingshot function with DC as reduction 
+SCP_SAP_slingshot <- slingshot(SCP_SAP, clusterLabels = "seurat_clusters_old", reducedDim = "DC")
+
+# Make this a ggplot! 
+df_sce_SCP_SAP <- as.data.frame(reducedDims(SCP_SAP_slingshot)$DC)
+
+ggplot(df_sce_SCP_SAP, aes(x = DC_1, y = DC_2, color = SCP_SAP_slingshot$slingPseudotime_1)) + 
+  geom_point() + 
+  theme_classic() + 
+  scale_color_viridis() + 
+  ggtitle("Pseudotime analysis from SCP to SAPs cells") + 
+  geom_smooth(se = FALSE, method = "loess", color = "black")
+```
+
+
+# Subset2: 12 - 22 - 11 - 18
+```{r}
+SCP_pro_SAP <- subset(cells_of_interest, subset = seurat_clusters_old == c("12", "22", "11", "18"))
+
+SCP_pro_SAP <- as.SingleCellExperiment(SCP_pro_SAP)
+# slingshot function with DC as reduction 
+SCP_pro_SAP_slingshot <- slingshot(SCP_pro_SAP, clusterLabels = "seurat_clusters_old", reducedDim = "DC")
+
+# Make this a ggplot! 
+df_sce_SCP_pro_SAP <- as.data.frame(reducedDims(SCP_pro_SAP_slingshot)$DC)
+
+ggplot(df_sce_SCP_pro_SAP, aes(x = DC_1, y = DC_2, color = SCP_pro_SAP_slingshot$slingPseudotime_1)) + 
+  geom_point() + 
+  theme_classic() + 
+  scale_color_viridis() + 
+  ggtitle("Pseudotime analysis from SCP to  Proliferating SAPs cells") + 
+  geom_smooth(se = FALSE, method = "loess", color = "black")
+```
+
+
+# Expression of genes over pseudotime trajectories 
+```{r}
+# PLP1 is a marker for SCP cells 
+qplot(sce_slingshot$slingPseudotime_1, as.numeric(cells_of_interest@assays$RNA@data["PLP1",]), 
+      color = sce_slingshot$seurat_clusters_old, ylab = "Expression PLP1", xlab = "Pseudotime") + 
+   theme_bw() + 
+  geom_smooth(aes(group = 1), se = FALSE, method = "loess", color = "gray")
+
+# STMN2 is a marker for SAP cells 
+qplot(sce_slingshot$slingPseudotime_1, as.numeric(cells_of_interest@assays$RNA@data["STMN2",]), 
+      color = sce_slingshot$seurat_clusters_old, ylab = "Expression STMN2", xlab = "Pseudotime") + 
+  theme_bw() + 
+  geom_smooth(aes(group = 1), se = FALSE, method = "loess", color = "gray")
+
+# Color based on pseudotime point 
+qplot(sce_slingshot$slingPseudotime_1, as.numeric(cells_of_interest@assays$RNA@data["STMN2",]), 
+      color = sce_slingshot$slingPseudotime_1, ylab = "Expression STMN2", xlab = "Pseudotime") +
+  scale_color_viridis() +
+  theme_bw() + 
+  geom_smooth(aes(group = 1), se = FALSE, method = "loess", color = "gray")
+
+# If you want to show a marker specific for the Proliferating SAP's, use slingPseudotime_2
+
+```
+
+
+```{r}
+# Some adjustments to the plot. We use expression, so log10 is a better representation 
+qplot(sce_slingshot$slingPseudotime_1, log10(as.numeric(cells_of_interest@assays$RNA@data["STMN2",])), 
+      color = sce_slingshot$seurat_clusters_old, ylab = "log10 Expression STMN2", xlab = "Pseudotime") + 
+   theme_bw() + 
+  geom_smooth(aes(group = 1), se = FALSE, method = "loess", color = "gray")
+
+
+# Maybe add boxplots to make the expression more clear
+expression <- as.numeric(cells_of_interest@assays$RNA@data["STMN2",])
+clusters <- cells_of_interest$seurat_clusters_old
+
+df <- data.frame(expression, clusters)
+head(df)
+
+ggplot() + 
+  geom_boxplot(aes(x = df$clusters, y = log10(df$expression), fill = df$clusters))  +
+  scale_x_discrete(limits = c("12", "22", "11", "9")) + 
+  theme_bw() + 
+  ylab("log10 Expression STMN2") + 
+  xlab("")
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
